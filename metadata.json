@@ -1,0 +1,6 @@
+{
+  "name": "Premium Accounts Hub",
+  "description": "Premium accounts and subscriptions storefront with real-time chat, GCash integration, and secure Google Auth.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}

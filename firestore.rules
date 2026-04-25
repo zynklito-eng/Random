@@ -1,0 +1,107 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 0. Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Primitive Helpers
+    function isSignedIn() { return request.auth != null; }
+    function isAdmin() { 
+      return isSignedIn() && 
+             request.auth.token.email == 'zynklito@gmail.com' && 
+             request.auth.token.email_verified == true;
+    }
+    function isVerifiedUser() { return isSignedIn() && request.auth.token.email_verified == true; }
+    function incoming() { return request.resource.data; }
+    function existing() { return resource.data; }
+    function isValidId(id) { return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); }
+
+    // Users Collection
+    function isValidUser(data) {
+      return data.keys().hasAll(['email', 'role', 'createdAt']) && 
+             data.keys().size() <= 5 &&
+             data.email is string && data.email.size() <= 255 &&
+             data.role is string && (data.role == 'admin' || data.role == 'user') &&
+             data.createdAt is number;
+    }
+    match /users/{userId} {
+      allow get: if isVerifiedUser() && (request.auth.uid == userId || isAdmin());
+      allow list: if isAdmin(); // only admin can list users
+      allow create: if isVerifiedUser() && isValidId(userId) && request.auth.uid == userId &&
+                    isValidUser(incoming()) && incoming().createdAt == request.time.toMillis();
+      allow update: if isVerifiedUser() && request.auth.uid == userId && 
+                    isValidUser(incoming()) && 
+                    incoming().diff(existing()).affectedKeys().hasOnly(['name', 'photoURL']);
+    }
+
+    // Products Collection
+    function isValidProduct(data) {
+      return data.keys().hasAll(['name', 'description', 'subscriptionName', 'price', 'status', 'createdAt', 'updatedAt']) &&
+             data.name is string && data.name.size() <= 100 && data.name.size() > 0 &&
+             data.description is string && data.description.size() <= 5000 &&
+             data.subscriptionName is string && data.subscriptionName.size() <= 100 &&
+             data.price is number && data.price >= 0 &&
+             data.status is string && (data.status == 'Available' || data.status == 'Sold Out') &&
+             data.createdAt is number && data.updatedAt is number;
+    }
+    match /products/{productId} {
+      allow read: if isVerifiedUser(); // Users can view products after login
+      allow create: if isAdmin() && isValidId(productId) && isValidProduct(incoming()) && 
+                    incoming().createdAt == request.time.toMillis() && incoming().updatedAt == request.time.toMillis();
+      allow update: if isAdmin() && isValidProduct(incoming()) && 
+                    incoming().updatedAt == request.time.toMillis() &&
+                    incoming().createdAt == existing().createdAt;
+      allow delete: if isAdmin();
+    }
+
+    // Conversations Collection
+    function isValidConversation(data) {
+      return data.keys().hasAll(['userId', 'createdAt', 'updatedAt']) &&
+             data.userId is string && data.userId.size() <= 128 &&
+             data.createdAt is number && data.updatedAt is number;
+    }
+    match /conversations/{conversationId} {
+      allow get: if isVerifiedUser() && (existing().userId == request.auth.uid || isAdmin());
+      allow list: if isVerifiedUser() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isVerifiedUser() && isValidId(conversationId) && 
+                    isValidConversation(incoming()) && 
+                    incoming().userId == request.auth.uid &&
+                    incoming().createdAt == request.time.toMillis() && 
+                    incoming().updatedAt == request.time.toMillis();
+      allow update: if isVerifiedUser() && isValidConversation(incoming()) &&
+                    (existing().userId == request.auth.uid || isAdmin()) &&
+                    incoming().updatedAt == request.time.toMillis() &&
+                    incoming().createdAt == existing().createdAt &&
+                    incoming().userId == existing().userId &&
+                    incoming().diff(existing()).affectedKeys().hasOnly(['updatedAt', 'lastMessage']);
+      
+      // Messages Subcollection
+      function isValidMessage(data) {
+        return data.keys().hasAll(['senderId', 'createdAt']) &&
+               data.senderId is string && data.senderId.size() <= 128 &&
+               data.createdAt is number;
+      }
+      match /messages/{messageId} {
+        allow read: if isVerifiedUser() && (get(/databases/$(database)/documents/conversations/$(conversationId)).data.userId == request.auth.uid || isAdmin());
+        allow create: if isVerifiedUser() && isValidId(messageId) && isValidMessage(incoming()) &&
+                      incoming().senderId == request.auth.uid &&
+                      incoming().createdAt == request.time.toMillis() &&
+                      (get(/databases/$(database)/documents/conversations/$(conversationId)).data.userId == request.auth.uid || isAdmin());
+      }
+    }
+
+    // Status Collection (Admin Presence)
+    function isValidAdminStatus(data) {
+      return data.keys().hasAll(['isOnline', 'updatedAt']) &&
+             data.isOnline is bool &&
+             data.updatedAt is number;
+    }
+    match /status/{statusId} {
+      allow read: if isVerifiedUser();
+      allow write: if isAdmin() && isValidId(statusId) && isValidAdminStatus(incoming()) && 
+                   incoming().updatedAt == request.time.toMillis();
+    }
+  }
+}
